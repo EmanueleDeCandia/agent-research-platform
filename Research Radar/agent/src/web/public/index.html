@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Research Radar — European Policy &amp; Innovation Intelligence</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <svg class="radar" viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-opacity=".25"/>
+        <circle cx="24" cy="24" r="13" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+        <circle cx="24" cy="24" r="5" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+        <line x1="24" y1="24" x2="43" y2="9" stroke="currentColor" stroke-width="2"/>
+        <circle cx="33" cy="20" r="2.4" fill="#34d399"/>
+        <circle cx="17" cy="30" r="1.8" fill="#38bdf8"/>
+      </svg>
+      <div>
+        <h1>Research Radar</h1>
+        <p class="tagline">Agentic intelligence on European policy &amp; innovation issues</p>
+      </div>
+    </div>
+    <div class="badges" id="badges"></div>
+  </header>
+
+  <nav class="pipeline" id="pipeline" aria-label="Research phases">
+    <div class="step" data-phase="issue_discovery"><span class="dot"></span>Issue Discovery</div>
+    <div class="step" data-phase="issue_committed"><span class="dot"></span>Issue Profile Committed</div>
+    <div class="step" data-phase="authoritative_retrieval"><span class="dot"></span>Authoritative Retrieval</div>
+    <div class="step" data-phase="candidate_validation"><span class="dot"></span>Candidate Validation</div>
+    <div class="step" data-phase="synthesis"><span class="dot"></span>Synthesis</div>
+  </nav>
+
+  <main>
+    <section class="panel input-panel">
+      <h2>Investigate an issue</h2>
+      <label class="field-label" for="question">Describe the substantive issue you want to investigate</label>
+      <textarea id="question" rows="10" spellcheck="false"
+        placeholder="Example: Identify European initiatives that reduce the dependence of EU firms and institutions on non-EU controlled compute, cloud, foundation models or semiconductors, and the related risks for strategic autonomy, industrial capacity, economic security and control of data."></textarea>
+      <p class="hint">A domain label such as “AI” or “energy” is not an Issue. Describe the problem, its mechanisms, the actors affected and the material impacts — the agent will enrich the language via web discovery before committing a structured Issue Profile.</p>
+      <button id="run-btn" class="primary">RUN RESEARCH</button>
+      <div id="run-status" class="run-status" aria-live="polite"></div>
+
+      <div class="recent" id="recent" hidden>
+        <h3>Recent runs</h3>
+        <ul id="recent-list"></ul>
+      </div>
+    </section>
+
+    <section class="panel results-panel">
+      <div class="tabs" role="tablist" id="tabs">
+        <button class="tab active" data-tab="activity" role="tab">Agent Activity</button>
+        <button class="tab" data-tab="profile" role="tab">Issue Profile</button>
+        <button class="tab" data-tab="sources" role="tab">Sources</button>
+        <button class="tab locked" data-tab="evidence" role="tab" title="Milestone 2 — Innovation Intelligence">Evidence 🔒</button>
+        <button class="tab locked" data-tab="synthesis" role="tab" title="Milestone 3 — Policy Intelligence &amp; Synthesis">Synthesis 🔒</button>
+      </div>
+      <div class="tab-content" id="tab-content">
+        <div class="empty-state">
+          <p>No research running.</p>
+          <p class="muted">Describe a substantive issue on the left and press <strong>RUN RESEARCH</strong>.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Research Radar · state-gated agentic research · Milestone 1 — Issue Understanding ·
+    authoritative retrieval is disabled until an Issue Profile is committed (and until Milestones 2–3)
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
