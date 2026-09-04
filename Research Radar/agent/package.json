@@ -1,0 +1,20 @@
+{
+  "name": "research-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Research Radar — agentic research platform for European policy and innovation intelligence (runtime agent implementation)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "start": "node dist/src/server/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
