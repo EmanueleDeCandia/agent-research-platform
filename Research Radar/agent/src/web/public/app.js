@@ -26,10 +26,16 @@ async function init() {
   renderBadges();
   wireTabs();
   const innovation = config.capabilities && config.capabilities.innovationRetrieval;
+  const policy = config.capabilities && config.capabilities.policyRetrieval;
   const evidenceTab = $("#evidence-tab");
+  const synthesisTab = $("#synthesis-tab");
   if (!innovation) {
     evidenceTab.classList.add("locked");
     evidenceTab.title = "Milestone 2 — Innovation Intelligence (set CORDIS_API_KEY or DEMO_MODE=true)";
+  }
+  if (!innovation && !policy) {
+    synthesisTab.classList.add("locked");
+    synthesisTab.title = "Authoritative retrieval milestones are disabled in this deployment";
   }
   $("#run-btn").addEventListener("click", onRun);
   await refreshRecent();
@@ -39,21 +45,28 @@ function renderBadges() {
   const badges = $("#badges");
   const items = [];
   if (config.demoMode) {
-    items.push('<span class="badge demo">DEMO MODE — scripted model &amp; fixture CORDIS, not a real run</span>');
+    items.push('<span class="badge demo">DEMO MODE — scripted model &amp; fixture sources, not a real run</span>');
   } else {
     items.push(`<span class="badge">model: ${esc(config.model)}</span>`);
   }
   const innovation = config.capabilities && config.capabilities.innovationRetrieval;
-  items.push(
-    innovation
-      ? '<span class="badge">milestone 2 — issue understanding + innovation (CORDIS)</span>'
-      : '<span class="badge">milestone 1 — issue understanding</span>',
-  );
-  items.push(
-    innovation
-      ? '<span class="badge">cordis: ' + (config.demoMode ? "fixture adapter" : "data extractions API") + "</span>"
-      : '<span class="badge">authoritative retrieval: locked</span>',
-  );
+  const policy = config.capabilities && config.capabilities.policyRetrieval;
+  if (policy) {
+    items.push('<span class="badge">milestone 3 — issue + innovation (CORDIS) + policy (EUR-Lex/CELLAR)</span>');
+  } else if (innovation) {
+    items.push('<span class="badge">milestone 2 — issue understanding + innovation (CORDIS)</span>');
+  } else {
+    items.push('<span class="badge">milestone 1 — issue understanding</span>');
+  }
+  if (innovation) {
+    items.push('<span class="badge">cordis: ' + (config.demoMode ? "fixture adapter" : "data extractions API") + "</span>");
+  }
+  if (policy) {
+    items.push('<span class="badge">cellar: ' + (config.demoMode ? "fixture adapter" : "public SPARQL") + "</span>");
+  }
+  if (!innovation && !policy) {
+    items.push('<span class="badge">authoritative retrieval: locked</span>');
+  }
   badges.innerHTML = items.join("");
 }
 
@@ -147,6 +160,58 @@ function renderTab(state) {
   else if (activeTab === "profile") content.innerHTML = renderProfile(state);
   else if (activeTab === "sources") content.innerHTML = renderSources(state);
   else if (activeTab === "evidence") content.innerHTML = renderEvidence(state);
+  else if (activeTab === "synthesis") content.innerHTML = renderSynthesis(state);
+}
+
+const POLICY_STAGE_ORDER = [
+  "signal",
+  "consultation",
+  "planned_initiative",
+  "proposal",
+  "legislative_process",
+  "adopted",
+  "evaluation",
+];
+
+function renderSynthesis(state) {
+  const evidence = state.evidence || [];
+  if (!state.finalMessage && evidence.length === 0 && state.status !== "completed" && state.status !== "stopped") {
+    return `<div class="empty-state"><p>No synthesis yet.</p>
+      <p class="muted">The final research synthesis appears here when the run reaches the synthesis phase.</p></div>`;
+  }
+  const policyEvidence = evidence.filter((ev) => ev.policyStage);
+  const innovationEvidence = evidence.filter((ev) => ev.evidenceType === "innovation");
+  const stages = [...new Set(policyEvidence.map((ev) => ev.policyStage))].sort(
+    (a, b) => POLICY_STAGE_ORDER.indexOf(a) - POLICY_STAGE_ORDER.indexOf(b),
+  );
+  const mostAdvanced = stages.length ? stages[stages.length - 1] : null;
+
+  const stageChips = stages
+    .map(
+      (stage) =>
+        `<span class="chip stage ${stage === mostAdvanced ? "top" : ""}">${esc(stage)}${stage === mostAdvanced ? " ◂ most advanced" : ""}</span>`,
+    )
+    .join("");
+
+  const section = (title, body) => `<div class="profile-section"><h4>${title}</h4>${body}</div>`;
+  const evidenceLine = (ev) =>
+    `<li><a href="${esc(ev.sourceUrl || "#")}" target="_blank" rel="noopener noreferrer">${esc(ev.title)}</a>` +
+    `${ev.policyStage ? ` <span class="chip stage">${esc(ev.policyStage)}</span>` : ""}` +
+    `<div class="src-date">${esc(ev.sourceProvider)} · ${esc(ev.sourceId || "")}</div></li>`;
+
+  return `
+    ${state.finalMessage ? `<div class="final-message"><h4>Final synthesis</h4>${esc(state.finalMessage)}</div>` : ""}
+    <div class="counters">
+      <span class="counter">status: <b>${esc(state.status)}</b></span>
+      <span class="counter">phase: <b>${esc(state.phase)}</b></span>
+      <span class="counter">policy evidence: <b>${policyEvidence.length}</b></span>
+      <span class="counter">innovation evidence: <b>${innovationEvidence.length}</b></span>
+      <span class="counter">candidates decided: <b>${(state.candidates || []).length}</b></span>
+    </div>
+    ${policyEvidence.length ? section("Policy maturity", `<div class="chips">${stageChips}</div>`) : ""}
+    ${policyEvidence.length ? section("Policy evidence", `<ul class="cand-list">${policyEvidence.map(evidenceLine).join("")}</ul>`) : ""}
+    ${innovationEvidence.length ? section("Innovation evidence", `<ul class="cand-list">${innovationEvidence.map(evidenceLine).join("")}</ul>`) : ""}
+  `;
 }
 
 function renderEvidence(state) {
@@ -178,7 +243,8 @@ function renderEvidence(state) {
       return `
       <div class="evidence-card">
         <div class="ev-head">
-          <span class="ev-type innovation">${esc(ev.evidenceType)}</span>
+          <span class="ev-type ${esc(ev.evidenceType)}">${esc(ev.evidenceType)}</span>
+          ${ev.policyStage ? `<span class="chip stage">${esc(ev.policyStage)}</span>` : ""}
           <a class="ev-title" href="${esc(ev.sourceUrl || "#")}" target="_blank" rel="noopener noreferrer">${esc(ev.title)}</a>
         </div>
         <div class="ev-prov">${esc(ev.sourceProvider)} · ${esc(ev.sourceId || ev.sourceUrl || "")} · ${esc(ev.createdAt)}</div>

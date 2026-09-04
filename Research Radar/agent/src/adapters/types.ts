@@ -25,6 +25,27 @@ export interface InnovationSourceAdapter {
   searchInnovationProjects(intent: InnovationSearchIntent): Promise<Candidate[]>;
 }
 
+/**
+ * Application-level intent for policy retrieval (RF-10). The tool expresses
+ * the information need; adapters decide which institutional sources to query
+ * (CELLAR, EUR-Lex, Commission Work Programme, ...) and hide their syntax.
+ */
+export interface PolicySearchIntent {
+  searchHypothesis: string;
+  /** The problem framing, carried from the committed profile. */
+  problemStatement: string;
+  /** Vocabulary terms for this hypothesis (institutional terminology first). */
+  keywords: string[];
+  /** Optional focus on document classes (communication, regulation, consultation, ...). */
+  documentTypes?: string[];
+  maxResults: number;
+}
+
+export interface PolicySourceAdapter {
+  readonly sourceProvider: string;
+  searchPolicyDocuments(intent: PolicySearchIntent): Promise<Candidate[]>;
+}
+
 export class AdapterError extends Error {
   constructor(
     readonly sourceProvider: string,

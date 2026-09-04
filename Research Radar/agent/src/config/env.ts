@@ -20,13 +20,16 @@ export const MILESTONE_CAPABILITIES: Capabilities = {
 /**
  * Milestone 2: innovation retrieval is active when CORDIS is not disabled and
  * either an API key is configured or demo mode provides the scripted adapter.
+ * Milestone 3: policy retrieval uses the public CELLAR SPARQL endpoint — no
+ * key required — and can be disabled with POLICY_ENABLED=false.
  */
 export function computeCapabilities(env: NodeJS.ProcessEnv, demoMode: boolean): Capabilities {
-  const enabled = (env["CORDIS_ENABLED"] ?? "true").trim().toLowerCase() !== "false";
-  const hasKey = Boolean((env["CORDIS_API_KEY"] ?? "").trim());
+  const cordisEnabled = (env["CORDIS_ENABLED"] ?? "true").trim().toLowerCase() !== "false";
+  const cordisKey = Boolean((env["CORDIS_API_KEY"] ?? "").trim());
+  const policyEnabled = (env["POLICY_ENABLED"] ?? "true").trim().toLowerCase() !== "false";
   return {
-    innovationRetrieval: enabled && (hasKey || demoMode),
-    policyRetrieval: false, // Milestone 3
+    innovationRetrieval: cordisEnabled && (cordisKey || demoMode),
+    policyRetrieval: policyEnabled,
   };
 }
 
@@ -42,6 +45,8 @@ export interface RuntimeConfig {
   readonly cordisApiKey?: string;
   readonly cordisBaseUrl?: string;
   readonly cordisMaxResultsCap: number;
+  readonly cellarBaseUrl?: string;
+  readonly cellarMaxResultsCap: number;
   readonly capabilities: Capabilities;
 }
 
@@ -78,6 +83,7 @@ export function loadRuntimeConfig(appRoot: string): RuntimeConfig {
   const apiKey = process.env["OPENAI_API_KEY"]?.trim();
   const cordisApiKey = process.env["CORDIS_API_KEY"]?.trim();
   const cordisBaseUrl = process.env["CORDIS_BASE_URL"]?.trim();
+  const cellarBaseUrl = process.env["CELLAR_BASE_URL"]?.trim();
   const demoMode = (process.env["DEMO_MODE"] ?? "").trim().toLowerCase() === "true";
   return {
     appRoot,
@@ -91,6 +97,8 @@ export function loadRuntimeConfig(appRoot: string): RuntimeConfig {
     ...(cordisApiKey ? { cordisApiKey } : {}),
     ...(cordisBaseUrl ? { cordisBaseUrl } : {}),
     cordisMaxResultsCap: readInt("CORDIS_MAX_RESULTS", 20),
+    ...(cellarBaseUrl ? { cellarBaseUrl } : {}),
+    cellarMaxResultsCap: readInt("CELLAR_MAX_RESULTS", 20),
     capabilities: computeCapabilities(process.env, demoMode),
   };
 }

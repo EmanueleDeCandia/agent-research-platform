@@ -102,6 +102,8 @@ export interface Candidate {
   publishedAt?: string;
   metadata: Record<string, unknown>;
   retrievedAt: string;
+  /** Which retrieval domain this candidate belongs to (set by the search tool). */
+  domain?: "innovation" | "policy";
 }
 
 /** Lifecycle of a retrieved Candidate inside a research run (P-04). */

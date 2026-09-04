@@ -4,23 +4,31 @@ import {
   CandidateValidationRecord,
   Evidence,
   MatchLevel,
+  PolicyStage,
 } from "../domain/models.js";
 import { recordActivity } from "../domain/state.js";
 import { SemanticTool } from "./registry.js";
 
 /**
- * validate_innovation_candidates (PRD RF-09, §10 — Semantic Validation).
+ * validate_policy_documents (PRD RF-11 + RF-12, Milestone 3).
  *
- * The model proposes a structured decision per Candidate; this executor
- * verifies the contract and persists Evidence server-side:
- *  - the candidate must exist in this run and still be pending;
- *  - "relevant" requires a substantive match level (same keyword / same
- *    technology / same sector is never enough — PRD §10);
- *  - IDs and timestamps are application-generated.
- * Deterministic guards turn model verbosity into explainable decisions.
+ * Semantic validation of policy Candidates with two distinct classifications:
+ *  - matchLevel: how substantively the document addresses the committed Issue
+ *    (same 6-level scale, RF-11);
+ *  - policyStage: the normalized institutional stage of the policy response
+ *    (RF-12) — an application classification, deliberately distinct from the
+ *    source metadata (documentType/date) preserved in Evidence.metadata.
+ *
+ * Guards enforced here in code:
+ *  - only policy-domain candidates of this run, decided once;
+ *  - relevant requires a substantive match level (same keyword/technology is
+ *    never enough — §10);
+ *  - a triggered exclusion can never be relevant;
+ *  - policyStage is optional only when the evidence does not support one
+ *    ("quando le evidenze lo consentono", RF-12).
  */
 
-export const VALIDATE_INNOVATION_CANDIDATES_NAME = "validate_innovation_candidates";
+export const VALIDATE_POLICY_DOCUMENTS_NAME = "validate_policy_documents";
 
 const MATCH_LEVELS: readonly MatchLevel[] = [
   "incidental_mention",
@@ -30,20 +38,44 @@ const MATCH_LEVELS: readonly MatchLevel[] = [
   "proposed_intervention",
   "formal_funded_response",
 ];
-
-/** A Candidate may become Evidence only from these levels onwards (§10). */
 const EVIDENCE_MIN_LEVEL = 2; // substantive_discussion
 
-export function createValidateInnovationCandidatesTool(): SemanticTool {
+export const POLICY_STAGES: readonly PolicyStage[] = [
+  "signal",
+  "consultation",
+  "planned_initiative",
+  "proposal",
+  "legislative_process",
+  "adopted",
+  "evaluation",
+];
+
+/** Deterministic application classification (RF-12) — independent of source metadata. */
+export function stageToEvidenceType(stage: PolicyStage): Evidence["evidenceType"] {
+  switch (stage) {
+    case "consultation":
+      return "consultation";
+    case "proposal":
+    case "legislative_process":
+    case "adopted":
+      return "legislative";
+    case "signal":
+    case "planned_initiative":
+    case "evaluation":
+      return "institutional";
+  }
+}
+
+export function createValidatePolicyDocumentsTool(): SemanticTool {
   return {
-    name: VALIDATE_INNOVATION_CANDIDATES_NAME,
+    name: VALIDATE_POLICY_DOCUMENTS_NAME,
     spec: {
       type: "function",
-      name: VALIDATE_INNOVATION_CANDIDATES_NAME,
+      name: VALIDATE_POLICY_DOCUMENTS_NAME,
       description:
-        "Semantically validate retrieved innovation Candidates against the committed Issue Profile. " +
-        "A project that shares only the same technology, sector or vocabulary must be not_relevant. " +
-        "Accepted candidates become Innovation Evidence with provenance.",
+        "Semantically validate policy document Candidates against the committed Issue Profile and " +
+        "classify the policy stage of the response. A document that merely mentions the topic or shares " +
+        "vocabulary must be not_relevant. Accepted documents become Policy Evidence with provenance.",
       strict: true,
       parameters: {
         type: "object",
@@ -52,7 +84,7 @@ export function createValidateInnovationCandidatesTool(): SemanticTool {
         properties: {
           validations: {
             type: "array",
-            description: "One decision per pending candidate.",
+            description: "One decision per pending policy candidate.",
             items: {
               type: "object",
               additionalProperties: false,
@@ -60,6 +92,7 @@ export function createValidateInnovationCandidatesTool(): SemanticTool {
                 "candidateId",
                 "verdict",
                 "matchLevel",
+                "policyStage",
                 "relevanceExplanation",
                 "matchedProblemElements",
                 "matchedMechanisms",
@@ -68,27 +101,35 @@ export function createValidateInnovationCandidatesTool(): SemanticTool {
                 "exclusionTriggered",
               ],
               properties: {
-                candidateId: { type: "string", description: "The candidateId returned by search_innovation_projects." },
+                candidateId: { type: "string", description: "The candidateId returned by search_policy_documents." },
                 verdict: {
                   type: "string",
                   enum: ["relevant", "not_relevant", "insufficient_content"],
                   description:
-                    "relevant = genuinely addresses the committed problem; not_relevant = shares only technology/sector/vocabulary " +
-                    "or triggers an exclusion; insufficient_content = not enough content to decide (reported as an information gap).",
+                    "relevant = genuinely addresses the committed problem; not_relevant = incidental mention, thematic " +
+                    "association or triggered exclusion; insufficient_content = record too thin to decide.",
                 },
                 matchLevel: {
                   type: "string",
                   enum: [...MATCH_LEVELS],
-                  description: "How substantively the candidate addresses the committed Issue.",
+                  description: "How substantively the document addresses the committed Issue (RF-11).",
+                },
+                policyStage: {
+                  anyOf: [{ type: "string", enum: [...POLICY_STAGES] }, { type: "null" }],
+                  description:
+                    "Normalized stage of the policy response (RF-12): signal, consultation, planned_initiative, " +
+                    "proposal, legislative_process, adopted, evaluation. Null only when relevant but the evidence " +
+                    "does not support a stage, or when not relevant.",
                 },
                 relevanceExplanation: {
                   type: "string",
-                  description: "Explain the fit or the mismatch with the Issue's problem, mechanisms, actors, impacts, interventions (min. 40 characters).",
+                  description:
+                    "Explain the fit/mismatch with the Issue's problem, mechanisms, actors, impacts, interventions, and the ground for the policy stage (min. 40 characters).",
                 },
-                matchedProblemElements: { type: "array", items: { type: "string" }, description: "Parts of the candidate that match the problem statement (empty when not relevant)." },
-                matchedMechanisms: { type: "array", items: { type: "string" }, description: "Matching causal mechanisms (empty when not relevant)." },
-                matchedImpacts: { type: "array", items: { type: "string" }, description: "Matching material impacts (empty when not relevant)." },
-                matchedInterventions: { type: "array", items: { type: "string" }, description: "Matching response/intervention elements (empty when not relevant)." },
+                matchedProblemElements: { type: "array", items: { type: "string" } },
+                matchedMechanisms: { type: "array", items: { type: "string" } },
+                matchedImpacts: { type: "array", items: { type: "string" } },
+                matchedInterventions: { type: "array", items: { type: "string" } },
                 exclusionTriggered: {
                   type: ["string", "null"],
                   description: "The committed exclusion this candidate triggers, or null when none.",
@@ -103,37 +144,42 @@ export function createValidateInnovationCandidatesTool(): SemanticTool {
     async execute(rawArgs, ctx) {
       const state = ctx.state;
 
-      if (!Array.isArray((rawArgs as { validations?: unknown })?.["validations"])) {
+      const rawValidations = (rawArgs as { validations?: unknown })?.["validations"];
+      if (!Array.isArray(rawValidations)) {
         return { error: '"validations" must be an array.' };
       }
-      const entries = (rawArgs as { validations: unknown[] })["validations"];
-      if (entries.length === 0) return { error: '"validations" must contain at least one decision.' };
+      if (rawValidations.length === 0) {
+        return { error: '"validations" must contain at least one decision.' };
+      }
 
       const errors: Array<{ candidateId: string; error: string }> = [];
       let accepted = 0;
       let rejected = 0;
       let insufficient = 0;
+      let withoutStage = 0;
 
-      for (const entry of entries) {
+      for (const entry of rawValidations) {
         const outcome = applyDecision(state, entry);
-        if (outcome === "accepted") {
-          accepted++;
-        } else if (outcome === "rejected") {
-          rejected++;
-        } else if (outcome === "insufficient") {
-          insufficient++;
-        } else {
+        if (typeof outcome === "string") {
           errors.push({ candidateId: idOf(entry), error: outcome });
+        } else if (outcome.kind === "accepted") {
+          accepted++;
+          if (outcome.policyStage === null) withoutStage++;
+        } else if (outcome.kind === "rejected") {
+          rejected++;
+        } else {
+          insufficient++;
         }
       }
 
       recordActivity(state, {
         type: "tool_result",
-        name: VALIDATE_INNOVATION_CANDIDATES_NAME,
+        name: VALIDATE_POLICY_DOCUMENTS_NAME,
         summary:
-          `Semantic validation: ${accepted} accepted, ${rejected} rejected, ${insufficient} insufficient content` +
+          `Policy validation: ${accepted} accepted, ${rejected} rejected, ${insufficient} insufficient content` +
+          `${withoutStage > 0 ? `, ${withoutStage} without a defensible policy stage` : ""}` +
           `${errors.length > 0 ? `, ${errors.length} invalid entr${errors.length === 1 ? "y" : "ies"}` : ""}`,
-        outputSummary: { accepted, rejected, insufficient, invalid: errors.length },
+        outputSummary: { accepted, rejected, insufficient, withoutStage, invalid: errors.length },
       });
 
       return {
@@ -141,6 +187,7 @@ export function createValidateInnovationCandidatesTool(): SemanticTool {
         accepted,
         rejected,
         insufficientContent: insufficient,
+        acceptedWithoutStage: withoutStage,
         evidenceCount: state.evidence.length,
         pendingCandidates: state.candidates.filter((candidate) => candidate.status === "pending").length,
         errors: errors.length > 0 ? errors : undefined,
@@ -148,6 +195,12 @@ export function createValidateInnovationCandidatesTool(): SemanticTool {
     },
   };
 }
+
+type DecisionOutcome =
+  | { kind: "accepted"; policyStage: PolicyStage | null }
+  | { kind: "rejected" }
+  | { kind: "insufficient" }
+  | string;
 
 function idOf(entry: unknown): string {
   if (typeof entry === "object" && entry !== null) {
@@ -160,7 +213,7 @@ function idOf(entry: unknown): string {
 function applyDecision(
   state: import("../domain/models.js").ResearchState,
   entry: unknown,
-): "accepted" | "rejected" | "insufficient" | string {
+): DecisionOutcome {
   if (typeof entry !== "object" || entry === null) return "each validation entry must be an object";
   const raw = entry as Record<string, unknown>;
 
@@ -169,8 +222,8 @@ function applyDecision(
   const candidate = state.candidates.find((record) => record.id === candidateId);
   if (!candidate) return `unknown candidateId "${candidateId}"`;
   if (candidate.status !== "pending") return `candidate "${candidate.title}" is already decided (${candidate.status})`;
-  if (candidate.domain && candidate.domain !== "innovation") {
-    return `candidate "${candidate.title}" does not belong to the innovation retrieval domain`;
+  if (candidate.domain !== "policy") {
+    return `candidate "${candidate.title}" does not belong to the policy retrieval domain`;
   }
 
   const verdict = raw["verdict"];
@@ -181,7 +234,14 @@ function applyDecision(
   if (typeof matchLevel !== "string" || !MATCH_LEVELS.includes(matchLevel as MatchLevel)) {
     return `invalid matchLevel for "${candidate.title}"`;
   }
-  const relevanceExplanation = typeof raw["relevanceExplanation"] === "string" ? raw["relevanceExplanation"].trim() : "";
+  const policyStageRaw = raw["policyStage"];
+  const policyStage: PolicyStage | null =
+    typeof policyStageRaw === "string" && POLICY_STAGES.includes(policyStageRaw as PolicyStage)
+      ? (policyStageRaw as PolicyStage)
+      : null;
+
+  const relevanceExplanation =
+    typeof raw["relevanceExplanation"] === "string" ? raw["relevanceExplanation"].trim() : "";
   if (relevanceExplanation.length < 40) {
     return `relevanceExplanation for "${candidate.title}" must be a substantive explanation (min. 40 characters)`;
   }
@@ -210,7 +270,7 @@ function applyDecision(
   if (verdict === "insufficient_content") {
     candidate.status = "insufficient_content";
     candidate.validation = validation;
-    return "insufficient";
+    return { kind: "insufficient" };
   }
 
   if (verdict === "relevant") {
@@ -219,28 +279,34 @@ function applyDecision(
     }
     if (MATCH_LEVELS.indexOf(matchLevel as MatchLevel) < EVIDENCE_MIN_LEVEL) {
       return (
-        `"${candidate.title}" cannot be Evidence at matchLevel "${matchLevel}": same keyword/technology/sector ` +
-        `is not Issue relevance. Use not_relevant or a substantive match level (PRD §10).`
+        `"${candidate.title}" cannot be Evidence at matchLevel "${matchLevel}": an incidental mention or a ` +
+        `thematic association is not Issue relevance (RF-11, PRD §10).`
       );
     }
-    const evidence = buildEvidence(candidate, validation, state.issueProfile?.id ?? "unknown-issue");
     candidate.status = "accepted";
     candidate.validation = validation;
-    state.evidence.push(evidence);
-    return "accepted";
+    state.evidence.push(
+      buildPolicyEvidence(candidate, validation, policyStage, state.issueProfile?.id ?? "unknown-issue"),
+    );
+    return { kind: "accepted", policyStage };
   }
 
   candidate.status = "rejected";
   candidate.validation = validation;
-  return "rejected";
+  return { kind: "rejected" };
 }
 
-function buildEvidence(candidate: CandidateRecord, validation: CandidateValidationRecord, issueId: string): Evidence {
+function buildPolicyEvidence(
+  candidate: CandidateRecord,
+  validation: CandidateValidationRecord,
+  policyStage: PolicyStage | null,
+  issueId: string,
+): Evidence {
   return {
     id: newId("evid"),
     issueId,
     candidateId: candidate.id,
-    evidenceType: "innovation",
+    evidenceType: policyStage ? stageToEvidenceType(policyStage) : "institutional",
     title: candidate.title,
     ...(candidate.summary ? { summary: candidate.summary } : {}),
     sourceProvider: candidate.sourceProvider,
@@ -251,6 +317,7 @@ function buildEvidence(candidate: CandidateRecord, validation: CandidateValidati
     matchedMechanisms: validation.matchedMechanisms,
     matchedImpacts: validation.matchedImpacts,
     matchedInterventions: validation.matchedInterventions,
+    ...(policyStage ? { policyStage } : {}),
     ...(candidate.metadata && Object.keys(candidate.metadata).length > 0
       ? { metadata: candidate.metadata }
       : {}),

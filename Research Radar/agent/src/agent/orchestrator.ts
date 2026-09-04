@@ -55,31 +55,51 @@ interface PhaseNudges {
 
 const MAX_VALIDATION_NUDGES = 2;
 
-function phaseEntryMessage(phase: ResearchPhase, state: import("../domain/models.js").ResearchState): string {
+function phaseEntryMessage(
+  phase: ResearchPhase,
+  state: import("../domain/models.js").ResearchState,
+  config: RuntimeConfig,
+): string {
   switch (phase) {
-    case "authoritative_retrieval":
+    case "authoritative_retrieval": {
+      const tools: string[] = [];
+      if (config.capabilities.innovationRetrieval) {
+        tools.push(
+          "search_innovation_projects for EU-funded innovation candidates (CORDIS)",
+        );
+      }
+      if (config.capabilities.policyRetrieval) {
+        tools.push(
+          "search_policy_documents for EU policy documents (EUR-Lex/CELLAR)",
+        );
+      }
       return (
-        "Phase authoritative_retrieval is now open. Call search_innovation_projects once per " +
-        "materially different search hypothesis of the committed Issue Profile (recall-oriented: " +
-        "retrieve broadly; precision comes from validation). Do not call commit_issue_profile again."
+        "Phase authoritative_retrieval is now open. Available retrieval tools: " +
+        `${tools.join("; ")}. Call each one once per materially different search hypothesis of the ` +
+        "committed Issue Profile (recall-oriented: retrieve broadly; precision comes from validation). " +
+        "Do not call commit_issue_profile again."
       );
+    }
     case "candidate_validation": {
       const pending = state.candidates.filter((candidate) => candidate.status === "pending").length;
       return (
-        `Candidate validation is now open (${pending} pending). Validate every candidate with ` +
-        "validate_innovation_candidates against the committed Issue: problem, mechanisms, actors, " +
-        "impacts, interventions, exclusions. Reject projects that merely share the same technology, " +
-        "sector or vocabulary, and mark insufficient_content when a record is too thin to decide. " +
-        "You may run more searches with different hypotheses if recall is insufficient."
+        `Candidate validation is now open (${pending} pending). Validate innovation projects with ` +
+        "validate_innovation_candidates and policy documents with validate_policy_documents, always against " +
+        "the committed Issue: problem, mechanisms, actors, impacts, interventions, exclusions. Reject records " +
+        "that merely share the same technology, sector or vocabulary, and mark insufficient_content when a " +
+        "record is too thin to decide. For policy documents also classify the policy stage (signal, " +
+        "consultation, planned_initiative, proposal, legislative_process, adopted, evaluation) when the " +
+        "evidence supports it. You may run more searches with different hypotheses if recall is insufficient."
       );
     }
     case "synthesis":
       return (
         "All candidates have been decided; phase synthesis is open. Produce your final message now: " +
-        "Executive Synthesis; Issue Definition (reference the committed profile); Innovation Signals " +
-        "(only validated Evidence, with provenance); Actors emerging from the Evidence; Information " +
-        "Gaps (including insufficient-content candidates and unexplored hypotheses); Sources. " +
-        "Base every claim on validated Evidence or mark it explicitly as inference or gap. " +
+        "Executive Synthesis; Issue Definition (reference the committed profile); Policy Signals and Policy " +
+        "Maturity (the most advanced policy stage supported by validated Evidence, when policy evidence " +
+        "exists); Innovation Signals (only validated Evidence, with provenance); Actors emerging from the " +
+        "Evidence; Information Gaps (including insufficient-content candidates and unexplored hypotheses); " +
+        "Sources. Base every claim on validated Evidence or mark it explicitly as inference or gap. " +
         "Do not call any further tool."
       );
     default:
@@ -103,20 +123,17 @@ function advancePhases(
     } else if (state.phase === "authoritative_retrieval" && state.candidates.length > 0) {
       applyTransition(state, "candidate_validation");
       advanced = true;
-    } else if (
-      state.phase === "candidate_validation" &&
-      state.candidates.length > 0 &&
-      state.candidates.every((candidate) => candidate.status !== "pending")
-    ) {
-      applyTransition(state, "synthesis");
-      advanced = true;
     }
+    // Note: candidate_validation -> synthesis is NOT automatic. While any
+    // retrieval hypothesis may still be explored, search tools must remain
+    // available; synthesis opens when the agent stops calling tools with all
+    // candidates decided (handled in the research loop).
     if (!advanced) break;
 
     const phase = state.phase;
     if (!nudges.sent.has(phase)) {
       nudges.sent.add(phase);
-      const message = phaseEntryMessage(phase, state);
+      const message = phaseEntryMessage(phase, state, config);
       if (message) state.conversation.push({ role: "user", content: message });
     }
   }
@@ -212,7 +229,7 @@ async function researchLoop(state: import("../domain/models.js").ResearchState, 
         continue;
       }
 
-      // Milestone 2: do not abandon pending Candidates silently — decide them
+      // Milestone 2/3: do not abandon pending Candidates silently — decide them
       // or explicitly close the run reporting the gap (bounded reminders).
       const pendingCandidates = state.candidates.filter((candidate) => candidate.status === "pending");
       if (
@@ -225,14 +242,31 @@ async function researchLoop(state: import("../domain/models.js").ResearchState, 
           role: "user",
           content:
             `${pendingCandidates.length} candidate(s) are still pending a decision. Call ` +
-            "validate_innovation_candidates for them (relevant / not_relevant / insufficient_content), " +
-            "or produce your final message explicitly reporting the undecided candidates as an information gap.",
+            "validate_innovation_candidates for innovation candidates and/or validate_policy_documents " +
+            "for policy candidates (relevant / not_relevant / insufficient_content), or produce your final " +
+            "message explicitly reporting the undecided candidates as an information gap.",
         });
         recordActivity(state, {
           type: "note",
           summary: "Agent paused with pending candidates; asking it to decide or report the gap.",
         });
         continue;
+      }
+
+      // The agent stopped calling tools with every candidate decided: the
+      // research is complete and the code opens the synthesis phase (the model
+      // never declares the transition itself).
+      if (
+        state.phase === "candidate_validation" &&
+        state.candidates.length > 0 &&
+        pendingCandidates.length === 0
+      ) {
+        applyTransition(state, "synthesis");
+        if (!nudges.sent.has("synthesis")) {
+          nudges.sent.add("synthesis");
+          const message = phaseEntryMessage("synthesis", state, config);
+          if (message) state.conversation.push({ role: "user", content: message });
+        }
       }
 
       if (finalText) state.finalMessage = finalText;

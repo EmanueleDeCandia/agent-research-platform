@@ -200,7 +200,10 @@ describe("Milestone 2 orchestrator — full innovation vertical slice", () => {
     assert.equal(toolNames(model.requests[1]!).includes("search_innovation_projects"), false);
     assert.deepEqual(toolNames(model.requests[2]!), ["search_innovation_projects"]);
     assert.deepEqual(toolNames(model.requests[3]!), ["search_innovation_projects", "validate_innovation_candidates"]);
-    assert.deepEqual(toolNames(model.requests[4]!), []);
+    // Turn 5 still runs in candidate_validation (synthesis is opened by the
+    // orchestrator only when the agent stops calling tools): search tools
+    // remain available for further hypotheses.
+    assert.deepEqual(toolNames(model.requests[4]!), ["search_innovation_projects", "validate_innovation_candidates"]);
 
     // Phase-entry instructions were injected exactly once per phase.
     for (const marker of [

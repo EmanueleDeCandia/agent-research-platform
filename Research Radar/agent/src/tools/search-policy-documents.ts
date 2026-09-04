@@ -1,33 +1,34 @@
 import { RuntimeConfig } from "../config/env.js";
 import { CandidateRecord } from "../domain/models.js";
 import { recordActivity } from "../domain/state.js";
-import { InnovationSourceAdapter } from "../adapters/types.js";
+import { PolicySourceAdapter } from "../adapters/types.js";
 import { SemanticTool } from "./registry.js";
 
 /**
- * search_innovation_projects (PRD RF-08, Milestone 2 core function).
+ * search_policy_documents (PRD RF-10, Milestone 3 core function).
  *
- * Receives a semantic intent built from the committed Issue Profile — never a
- * generic keyword. The adapter translates the intent into source-specific
- * queries; the output is normalized Candidate[] (P-04: Candidates, not
- * Evidence). Availability is phase-gated; the executor additionally refuses to
- * run without a committed Issue Profile (P-02, defense in depth).
+ * The tool expresses the application-level information need; one or more
+ * policy adapters decide which institutional sources to query (EUR-Lex,
+ * CELLAR, ...). The Agent never sees SPARQL/SOAP or source schemas. Output is
+ * normalized Candidate[] — never Evidence. Phase-gated + P-02 defense in
+ * depth, exactly like the innovation tool.
  */
 
-export const SEARCH_INNOVATION_PROJECTS_NAME = "search_innovation_projects";
+export const SEARCH_POLICY_DOCUMENTS_NAME = "search_policy_documents";
 
 const MAX_CONTENT_CHARS = 3_500;
 
-export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdapter): SemanticTool {
+export function createSearchPolicyDocumentsTool(adapter: PolicySourceAdapter): SemanticTool {
   return {
-    name: SEARCH_INNOVATION_PROJECTS_NAME,
+    name: SEARCH_POLICY_DOCUMENTS_NAME,
     spec: {
       type: "function",
-      name: SEARCH_INNOVATION_PROJECTS_NAME,
+      name: SEARCH_POLICY_DOCUMENTS_NAME,
       description:
-        "Retrieve EU-funded innovation project candidates (CORDIS) for the committed Issue. " +
-        "Call once per materially different search hypothesis. Results are Candidates: they " +
-        "become Evidence only after validate_innovation_candidates accepts them.",
+        "Retrieve EU policy document candidates (EUR-Lex/CELLAR: communications, regulations, " +
+        "directives, proposals, consultations) for the committed Issue. Call once per materially " +
+        "different search hypothesis. Results are Candidates: they become Policy Evidence only " +
+        "after validate_policy_documents accepts them with a policy stage classification.",
       strict: true,
       parameters: {
         type: "object",
@@ -36,7 +37,7 @@ export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdap
           "searchHypothesis",
           "problemStatement",
           "keywords",
-          "mechanisms",
+          "documentTypes",
           "maxResults",
         ],
         properties: {
@@ -52,12 +53,30 @@ export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdap
           keywords: {
             type: "array",
             items: { type: "string" },
-            description: "2-6 vocabulary terms of this hypothesis (canonical/institutional/technical).",
+            description: "2-6 vocabulary terms of this hypothesis (institutional terminology first).",
           },
-          mechanisms: {
-            type: "array",
-            items: { type: "string" },
-            description: "Causal mechanisms from the profile that retrieved projects should plausibly address.",
+          documentTypes: {
+            anyOf: [
+              {
+                type: "array",
+                items: {
+                  type: "string",
+                  enum: [
+                    "communication",
+                    "regulation",
+                    "directive",
+                    "decision",
+                    "proposal",
+                    "consultation",
+                    "work_programme",
+                    "other",
+                  ],
+                },
+              },
+              { type: "null" },
+            ],
+            description:
+              "Optional focus on document classes (null = no filter, recall first). The adapter may ignore unsupported values.",
           },
           maxResults: {
             type: ["integer", "null"],
@@ -68,7 +87,7 @@ export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdap
     },
     availableInPhases: ["authoritative_retrieval", "candidate_validation"],
     async execute(rawArgs, ctx) {
-      const { state, config }: { state: import("../domain/models.js").ResearchState; config: RuntimeConfig } = ctx;
+      const { state }: { state: import("../domain/models.js").ResearchState; config: RuntimeConfig } = ctx;
 
       if (!state.issueProfile) {
         return {
@@ -83,15 +102,15 @@ export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdap
 
       let retrieved: import("../domain/models.js").Candidate[];
       try {
-        retrieved = await adapter.searchInnovationProjects(parsed.intent);
+        retrieved = await adapter.searchPolicyDocuments(parsed.intent);
       } catch (error) {
         return {
-          error: `Innovation retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
+          error: `Policy retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
           sourceProvider: adapter.sourceProvider,
         };
       }
 
-      // RF-14: deduplicate by canonical source identifier, fallback to URL.
+      // RF-14: dedup by canonical source identifier (CELEX), fallback to URL.
       const duplicates: number[] = [];
       const added: CandidateRecord[] = [];
       for (const candidate of retrieved) {
@@ -101,14 +120,14 @@ export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdap
           duplicates.push(1);
           continue;
         }
-        const record: CandidateRecord = { ...candidate, status: "pending", domain: "innovation" };
+        const record: CandidateRecord = { ...candidate, status: "pending", domain: "policy" };
         state.candidates.push(record);
         added.push(record);
       }
       recordActivity(state, {
         type: "note",
         summary:
-          `CORDIS retrieval "${parsed.intent.searchHypothesis.slice(0, 80)}": ` +
+          `Policy retrieval "${parsed.intent.searchHypothesis.slice(0, 80)}": ` +
           `${retrieved.length} record(s), ${added.length} new, ${duplicates.length} duplicate(s)`,
         outputSummary: {
           sourceProvider: adapter.sourceProvider,
@@ -127,14 +146,20 @@ export function createSearchInnovationProjectsTool(adapter: InnovationSourceAdap
         totalCandidatesInRun: state.candidates.length,
         candidates: added.map((record) => toViewModel(record)),
         guidance:
-          "These are Candidates, not Evidence. Validate each with validate_innovation_candidates " +
-          "against the committed Issue (problem, mechanisms, actors, impacts, interventions, exclusions).",
+          "These are Candidates, not Evidence. Validate each with validate_policy_documents against " +
+          "the committed Issue and classify the policy stage (signal, consultation, planned_initiative, " +
+          "proposal, legislative_process, adopted, evaluation) when the evidence supports it.",
       };
     },
   };
 }
 
-function candidateKey(candidate: { sourceProvider: string; sourceId?: string; sourceUrl?: string; title: string }): string {
+function candidateKey(candidate: {
+  sourceProvider: string;
+  sourceId?: string;
+  sourceUrl?: string;
+  title: string;
+}): string {
   if (candidate.sourceId) return `${candidate.sourceProvider}::${candidate.sourceId}`;
   return `${candidate.sourceProvider}::url::${candidate.sourceUrl ?? candidate.title}`;
 }
@@ -156,9 +181,7 @@ function toViewModel(record: CandidateRecord): Record<string, unknown> {
 
 function parseIntent(
   raw: unknown,
-):
-  | { error: string }
-  | { intent: import("../adapters/types.js").InnovationSearchIntent } {
+): { error: string } | { intent: import("../adapters/types.js").PolicySearchIntent } {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { error: "Arguments must be a JSON object." };
   }
@@ -172,15 +195,25 @@ function parseIntent(
     return { error: '"problemStatement" must carry the committed problem framing (min. 20 characters).' };
   }
   const stringArray = (value: unknown): string[] =>
-    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
   const keywords = stringArray(args["keywords"]);
   if (keywords.length < 1) {
     return { error: '"keywords" must contain at least 1 vocabulary term.' };
   }
-  const mechanisms = stringArray(args["mechanisms"]);
+  const documentTypes = stringArray(args["documentTypes"]);
   let maxResults = 10;
   if (typeof args["maxResults"] === "number" && Number.isInteger(args["maxResults"])) {
     maxResults = Math.min(Math.max(args["maxResults"], 1), 20);
   }
-  return { intent: { searchHypothesis, problemStatement, keywords, mechanisms, maxResults } };
+  return {
+    intent: {
+      searchHypothesis,
+      problemStatement,
+      keywords,
+      ...(documentTypes.length > 0 ? { documentTypes } : {}),
+      maxResults,
+    },
+  };
 }

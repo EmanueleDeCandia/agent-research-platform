@@ -62,6 +62,7 @@ export function testConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfi
     maxToolCalls: 8,
     demoMode: false,
     cordisMaxResultsCap: 20,
+    cellarMaxResultsCap: 20,
     capabilities: MILESTONE_CAPABILITIES,
     ...overrides,
   };

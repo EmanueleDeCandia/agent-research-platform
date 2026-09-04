@@ -245,3 +245,14 @@ footer {
   padding: 16px 28px; border-top: 1px solid var(--panel-edge);
   color: var(--ink-faint); font-size: 11.5px; text-align: center;
 }
+
+/* Policy evidence types & stage chips (Milestone 3) */
+.ev-type.legislative { color: #c4b5fd; border: 1px solid rgba(167, 139, 250, .45); }
+.ev-type.consultation { color: #fcd34d; border: 1px solid rgba(251, 191, 36, .45); }
+.ev-type.institutional { color: #7dd3fc; border: 1px solid rgba(56, 189, 248, .45); }
+.chip.stage {
+  border-color: rgba(167, 139, 250, .45); color: #c4b5fd; font-family: var(--mono); font-size: 11px;
+}
+.chip.stage.top {
+  border-color: rgba(196, 181, 253, .8); color: #ddd6fe; background: rgba(167, 139, 250, .12);
+}
