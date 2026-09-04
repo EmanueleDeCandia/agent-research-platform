@@ -25,6 +25,12 @@ async function init() {
   config = await fetchJson("/api/config");
   renderBadges();
   wireTabs();
+  const innovation = config.capabilities && config.capabilities.innovationRetrieval;
+  const evidenceTab = $("#evidence-tab");
+  if (!innovation) {
+    evidenceTab.classList.add("locked");
+    evidenceTab.title = "Milestone 2 — Innovation Intelligence (set CORDIS_API_KEY or DEMO_MODE=true)";
+  }
   $("#run-btn").addEventListener("click", onRun);
   await refreshRecent();
 }
@@ -33,14 +39,21 @@ function renderBadges() {
   const badges = $("#badges");
   const items = [];
   if (config.demoMode) {
-    items.push('<span class="badge demo">DEMO MODE — scripted model, not a real run</span>');
+    items.push('<span class="badge demo">DEMO MODE — scripted model &amp; fixture CORDIS, not a real run</span>');
   } else {
     items.push(`<span class="badge">model: ${esc(config.model)}</span>`);
   }
-  items.push('<span class="badge">milestone 1 — issue understanding</span>');
-  if (config.capabilities && !config.capabilities.innovationRetrieval) {
-    items.push('<span class="badge">authoritative retrieval: locked</span>');
-  }
+  const innovation = config.capabilities && config.capabilities.innovationRetrieval;
+  items.push(
+    innovation
+      ? '<span class="badge">milestone 2 — issue understanding + innovation (CORDIS)</span>'
+      : '<span class="badge">milestone 1 — issue understanding</span>',
+  );
+  items.push(
+    innovation
+      ? '<span class="badge">cordis: ' + (config.demoMode ? "fixture adapter" : "data extractions API") + "</span>"
+      : '<span class="badge">authoritative retrieval: locked</span>',
+  );
   badges.innerHTML = items.join("");
 }
 
@@ -133,6 +146,78 @@ function renderTab(state) {
   if (activeTab === "activity") content.innerHTML = renderActivity(state);
   else if (activeTab === "profile") content.innerHTML = renderProfile(state);
   else if (activeTab === "sources") content.innerHTML = renderSources(state);
+  else if (activeTab === "evidence") content.innerHTML = renderEvidence(state);
+}
+
+function renderEvidence(state) {
+  const candidates = state.candidates || [];
+  const evidence = state.evidence || [];
+  if (!candidates.length && !evidence.length) {
+    return `<div class="empty-state"><p>No candidates or evidence yet.</p>
+      <p class="muted">After the Issue Profile is committed, the agent retrieves CORDIS candidates and
+      validates them against the committed Issue. Accepted candidates become Innovation Evidence here.</p></div>`;
+  }
+
+  const evidenceCards = evidence
+    .map((ev) => {
+      const meta = ev.metadata || {};
+      const metaBits = [
+        meta.frameworkProgramme && `programme: ${esc(meta.frameworkProgramme)}`,
+        meta.ecContributionEur != null && `EU contribution: €${Number(meta.ecContributionEur).toLocaleString("en-US")}`,
+        meta.totalCostEur != null && `total cost: €${Number(meta.totalCostEur).toLocaleString("en-US")}`,
+        meta.startDate && `start: ${esc(meta.startDate)}`,
+        meta.coordinator && `coordinator: ${esc(meta.coordinator)}`,
+        meta.countries && `countries: ${esc(meta.countries)}`,
+      ].filter(Boolean);
+      const matched = [
+        ...toChips(ev.matchedProblemElements, "term"),
+        ...toChips(ev.matchedMechanisms, "term"),
+        ...toChips(ev.matchedImpacts, "term"),
+        ...toChips(ev.matchedInterventions, "term"),
+      ];
+      return `
+      <div class="evidence-card">
+        <div class="ev-head">
+          <span class="ev-type innovation">${esc(ev.evidenceType)}</span>
+          <a class="ev-title" href="${esc(ev.sourceUrl || "#")}" target="_blank" rel="noopener noreferrer">${esc(ev.title)}</a>
+        </div>
+        <div class="ev-prov">${esc(ev.sourceProvider)} · ${esc(ev.sourceId || ev.sourceUrl || "")} · ${esc(ev.createdAt)}</div>
+        <p class="ev-expl">${esc(ev.relevanceExplanation)}</p>
+        ${matched.length ? `<div class="chips">${matched.join("")}</div>` : ""}
+        ${metaBits.length ? `<div class="ev-meta">${metaBits.map((b) => `<span class="chip">${b}</span>`).join("")}</div>` : ""}
+      </div>`;
+    })
+    .join("");
+
+  const candidateRows = candidates
+    .map((c) => {
+      const status = c.status || "pending";
+      const reason = c.validation ? c.validation.relevanceExplanation : "";
+      const excl = c.validation && c.validation.exclusionTriggered
+        ? `<div class="src-date">exclusion: ${esc(c.validation.exclusionTriggered)}</div>` : "";
+      const level = c.validation ? ` · ${esc(c.validation.matchLevel)}` : "";
+      return `
+      <li class="cand ${status}">
+        <div class="cand-main">
+          <a href="${esc(c.sourceUrl || "#")}" target="_blank" rel="noopener noreferrer">${esc(c.title)}</a>
+          ${reason ? `<div class="src-date">${esc(reason.slice(0, 220))}${reason.length > 220 ? "…" : ""}${level}</div>` : ""}
+          ${excl}
+        </div>
+        <span class="status-chip ${status}">${esc(status)}</span>
+      </li>`;
+    })
+    .join("");
+
+  return `
+    <h3 style="margin:0 0 10px">Innovation Evidence (${evidence.length})</h3>
+    ${evidence.length ? evidenceCards : '<p class="muted" style="font-size:13px">No candidate has passed semantic validation yet.</p>'}
+    <h3 style="margin:22px 0 10px">Candidates (${candidates.length})</h3>
+    <ul class="cand-list">${candidateRows}</ul>
+  `;
+}
+
+function toChips(values, cls) {
+  return (values || []).map((v) => `<span class="chip ${cls}">${esc(v)}</span>`).join("");
 }
 
 function renderActivity(state) {

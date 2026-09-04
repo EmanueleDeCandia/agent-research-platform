@@ -67,6 +67,9 @@ describe("HTTP API integration", () => {
       issueProfile: { title: string } | null;
       activity: Array<{ type: string }>;
       finalMessage: string | null;
+      candidates: unknown[];
+      evidence: unknown[];
+      counters: { candidates: number; evidence: number };
       conversation?: unknown;
     };
     assert.equal(state.phase, "issue_committed");
@@ -74,6 +77,10 @@ describe("HTTP API integration", () => {
     assert.ok(state.issueProfile?.title);
     assert.ok(state.activity.some((entry) => entry.type === "state_transition"));
     assert.equal(state.finalMessage, "Simulated final summary.");
+    assert.deepEqual(state.candidates, []);
+    assert.deepEqual(state.evidence, []);
+    assert.equal(state.counters.candidates, 0);
+    assert.equal(state.counters.evidence, 0);
     assert.equal(state.conversation, undefined, "internal conversation must not be serialized");
   });
 

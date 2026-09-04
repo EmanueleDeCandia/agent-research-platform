@@ -89,7 +89,7 @@ export interface CommitIssueProfileResult {
 
 /**
  * Normalized, source-independent retrieval record (DATA_MODEL §6).
- * Placeholder contract for Milestone 2 — not populated yet.
+ * A retrieved record stays a Candidate until semantic validation accepts it.
  */
 export interface Candidate {
   id: string;
@@ -102,6 +102,40 @@ export interface Candidate {
   publishedAt?: string;
   metadata: Record<string, unknown>;
   retrievedAt: string;
+}
+
+/** Lifecycle of a retrieved Candidate inside a research run (P-04). */
+export type CandidateStatus = "pending" | "accepted" | "rejected" | "insufficient_content";
+
+/**
+ * How substantively a candidate addresses the committed Issue
+ * (PRD §10, prompt "Phase 3"). Distinct from PolicyStage (RF-12).
+ */
+export type MatchLevel =
+  | "incidental_mention"
+  | "thematic_association"
+  | "substantive_discussion"
+  | "explicit_problem_recognition"
+  | "proposed_intervention"
+  | "formal_funded_response";
+
+/** Model-proposed, code-validated semantic decision about a Candidate (RF-09). */
+export interface CandidateValidationRecord {
+  verdict: "relevant" | "not_relevant" | "insufficient_content";
+  matchLevel: MatchLevel;
+  relevanceExplanation: string;
+  matchedProblemElements: string[];
+  matchedMechanisms: string[];
+  matchedImpacts: string[];
+  matchedInterventions: string[];
+  exclusionTriggered?: string;
+  decidedAt: string;
+}
+
+/** A Candidate stored in the research state, with its validation outcome. */
+export interface CandidateRecord extends Candidate {
+  status: CandidateStatus;
+  validation?: CandidateValidationRecord;
 }
 
 /**
@@ -137,6 +171,8 @@ export interface Evidence {
   matchedImpacts: string[];
   matchedInterventions: string[];
   policyStage?: PolicyStage;
+  /** Structured enrichment preserved from the Candidate (Stage D). */
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -158,6 +194,8 @@ export interface ResearchState {
   issueProfile?: IssueProfile;
   activity: AgentActivity[];
   discoverySources: DiscoverySource[];
+  candidates: CandidateRecord[];
+  evidence: Evidence[];
   conversation: Array<Record<string, unknown>>;
   finalMessage?: string;
   errorMessage?: string;

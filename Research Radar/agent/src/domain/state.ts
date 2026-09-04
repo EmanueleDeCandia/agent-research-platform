@@ -39,6 +39,8 @@ export function createResearchState(userQuestion: string): ResearchState {
     userQuestion,
     activity: [],
     discoverySources: [],
+    candidates: [],
+    evidence: [],
     conversation: [],
     counters: { modelTurns: 0, toolCalls: 0, webSearches: 0 },
     createdAt: now,

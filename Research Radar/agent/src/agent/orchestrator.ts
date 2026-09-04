@@ -1,6 +1,6 @@
 import { RuntimeConfig } from "../config/env.js";
-import { DiscoverySource } from "../domain/models.js";
-import { recordActivity, touch } from "../domain/state.js";
+import { DiscoverySource, ResearchPhase } from "../domain/models.js";
+import { applyTransition, recordActivity, touch } from "../domain/state.js";
 import { SemanticTool, toolsForPhase, WEB_SEARCH_TOOL } from "../tools/registry.js";
 import { ModelClient } from "./openai.js";
 import { buildInstructions } from "./prompt.js";
@@ -42,6 +42,86 @@ function continuationNudge(attempt: number): string {
   );
 }
 
+/**
+ * Code-enforced phase advancement (P-07): the model never declares a
+ * transition. After each tool batch the orchestrator applies the deterministic
+ * rules of the state machine and, when a phase is entered, injects one
+ * deterministic phase-entry instruction (allowed wrapper per ARCHITECTURE §6).
+ */
+interface PhaseNudges {
+  sent: Set<ResearchPhase>;
+  validationReminders: number;
+}
+
+const MAX_VALIDATION_NUDGES = 2;
+
+function phaseEntryMessage(phase: ResearchPhase, state: import("../domain/models.js").ResearchState): string {
+  switch (phase) {
+    case "authoritative_retrieval":
+      return (
+        "Phase authoritative_retrieval is now open. Call search_innovation_projects once per " +
+        "materially different search hypothesis of the committed Issue Profile (recall-oriented: " +
+        "retrieve broadly; precision comes from validation). Do not call commit_issue_profile again."
+      );
+    case "candidate_validation": {
+      const pending = state.candidates.filter((candidate) => candidate.status === "pending").length;
+      return (
+        `Candidate validation is now open (${pending} pending). Validate every candidate with ` +
+        "validate_innovation_candidates against the committed Issue: problem, mechanisms, actors, " +
+        "impacts, interventions, exclusions. Reject projects that merely share the same technology, " +
+        "sector or vocabulary, and mark insufficient_content when a record is too thin to decide. " +
+        "You may run more searches with different hypotheses if recall is insufficient."
+      );
+    }
+    case "synthesis":
+      return (
+        "All candidates have been decided; phase synthesis is open. Produce your final message now: " +
+        "Executive Synthesis; Issue Definition (reference the committed profile); Innovation Signals " +
+        "(only validated Evidence, with provenance); Actors emerging from the Evidence; Information " +
+        "Gaps (including insufficient-content candidates and unexplored hypotheses); Sources. " +
+        "Base every claim on validated Evidence or mark it explicitly as inference or gap. " +
+        "Do not call any further tool."
+      );
+    default:
+      return "";
+  }
+}
+
+function advancePhases(
+  state: import("../domain/models.js").ResearchState,
+  config: RuntimeConfig,
+  nudges: PhaseNudges,
+): void {
+  const hasRetrievalCapabilities =
+    config.capabilities.innovationRetrieval || config.capabilities.policyRetrieval;
+
+  for (;;) {
+    let advanced = false;
+    if (state.phase === "issue_committed" && hasRetrievalCapabilities) {
+      applyTransition(state, "authoritative_retrieval");
+      advanced = true;
+    } else if (state.phase === "authoritative_retrieval" && state.candidates.length > 0) {
+      applyTransition(state, "candidate_validation");
+      advanced = true;
+    } else if (
+      state.phase === "candidate_validation" &&
+      state.candidates.length > 0 &&
+      state.candidates.every((candidate) => candidate.status !== "pending")
+    ) {
+      applyTransition(state, "synthesis");
+      advanced = true;
+    }
+    if (!advanced) break;
+
+    const phase = state.phase;
+    if (!nudges.sent.has(phase)) {
+      nudges.sent.add(phase);
+      const message = phaseEntryMessage(phase, state);
+      if (message) state.conversation.push({ role: "user", content: message });
+    }
+  }
+}
+
 export async function runResearch(state: import("../domain/models.js").ResearchState, deps: OrchestratorDeps): Promise<void> {
   state.status = "running";
   touch(state);
@@ -72,6 +152,7 @@ async function researchLoop(state: import("../domain/models.js").ResearchState, 
   let wrapUpNudgeSent = false;
   let continuationNudges = 0;
   const MAX_CONTINUATION_NUDGES = 2;
+  const nudges: PhaseNudges = { sent: new Set(), validationReminders: 0 };
 
   while (state.counters.modelTurns < config.maxModelTurns) {
     const phaseTools = toolsForPhase(deps.registry, state.phase);
@@ -131,6 +212,29 @@ async function researchLoop(state: import("../domain/models.js").ResearchState, 
         continue;
       }
 
+      // Milestone 2: do not abandon pending Candidates silently — decide them
+      // or explicitly close the run reporting the gap (bounded reminders).
+      const pendingCandidates = state.candidates.filter((candidate) => candidate.status === "pending");
+      if (
+        state.phase === "candidate_validation" &&
+        pendingCandidates.length > 0 &&
+        nudges.validationReminders < MAX_VALIDATION_NUDGES
+      ) {
+        nudges.validationReminders++;
+        state.conversation.push({
+          role: "user",
+          content:
+            `${pendingCandidates.length} candidate(s) are still pending a decision. Call ` +
+            "validate_innovation_candidates for them (relevant / not_relevant / insufficient_content), " +
+            "or produce your final message explicitly reporting the undecided candidates as an information gap.",
+        });
+        recordActivity(state, {
+          type: "note",
+          summary: "Agent paused with pending candidates; asking it to decide or report the gap.",
+        });
+        continue;
+      }
+
       if (finalText) state.finalMessage = finalText;
       recordActivity(state, { type: "note", summary: "Agent produced its final message; run complete." });
       return;
@@ -168,8 +272,9 @@ async function researchLoop(state: import("../domain/models.js").ResearchState, 
       });
     }
 
-    // Milestone 1: the run stops after ISSUE_COMMITTED. Ask the model for its
-    // final Issue Understanding summary instead of burning further turns.
+    // Code-enforced phase advancement after each tool batch (P-07). In a
+    // Milestone 1 deployment (no retrieval capabilities) the run instead stops
+    // after ISSUE_COMMITTED with a wrap-up request for the final summary.
     if (
       state.phase === "issue_committed" &&
       !config.capabilities.innovationRetrieval &&
@@ -184,6 +289,8 @@ async function researchLoop(state: import("../domain/models.js").ResearchState, 
           "Provide now your concise final Issue Understanding summary: what the Issue is, the key " +
           "language discovered, and what the committed profile enables next. Do not call any further tool.",
       });
+    } else {
+      advancePhases(state, config, nudges);
     }
   }
 
@@ -287,5 +394,13 @@ function outcomeSummary(outcome: Record<string, unknown>): unknown {
     summary["validationErrors"] = (outcome["validationErrors"] as unknown[]).slice(0, 8);
   }
   if (typeof outcome["error"] === "string") summary["error"] = outcome["error"];
+  if (typeof outcome["newCandidates"] === "number") summary["newCandidates"] = outcome["newCandidates"];
+  if (typeof outcome["duplicates"] === "number") summary["duplicates"] = outcome["duplicates"];
+  if (typeof outcome["totalCandidatesInRun"] === "number") {
+    summary["totalCandidatesInRun"] = outcome["totalCandidatesInRun"];
+  }
+  for (const key of ["accepted", "rejected", "insufficientContent", "evidenceCount", "pendingCandidates"]) {
+    if (typeof outcome[key] === "number") summary[key] = outcome[key];
+  }
   return Object.keys(summary).length > 0 ? summary : undefined;
 }

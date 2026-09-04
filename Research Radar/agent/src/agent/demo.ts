@@ -2,9 +2,14 @@ import { ModelClient, ModelRequest, ModelResponse } from "./openai.js";
 
 /**
  * Scripted demo model client. Used ONLY when DEMO_MODE=true so that the UI
- * workflow can be previewed without an OpenAI key. Every response it produces
- * uses the same wire format as the real Responses API, so the orchestrator,
- * state machine and UI run their genuine code paths.
+ * workflow can be previewed without an OpenAI key. Every response uses the
+ * same wire format as the real Responses API, so the orchestrator, state
+ * machine, adapters and UI run their genuine code paths.
+ *
+ * The script is conversation-aware (not turn-count based): it looks at what
+ * has already happened in the run and produces the next step — discovery,
+ * Issue Profile commit, CORDIS retrieval (Milestone 2), semantic validation,
+ * or the final synthesis.
  *
  * This is a demo aid, not a substitute for the real integration: the default
  * deployment uses OpenAIResponsesClient (AGENTS.md verification rules).
@@ -78,71 +83,209 @@ const DEMO_CITATIONS = [
 export class ScriptedModelClient implements ModelClient {
   private turn = 0;
 
-  async createResponse(_request: ModelRequest): Promise<ModelResponse> {
+  /** innovation: whether the Milestone 2 CORDIS flow is deployed. */
+  constructor(private readonly innovation: boolean = false) {}
+
+  async createResponse(request: ModelRequest): Promise<ModelResponse> {
     this.turn++;
     const id = `demo_resp_${this.turn}`;
+    const input = request.input as Array<Record<string, unknown>>;
 
-    if (this.turn === 1) {
+    const hasFunctionCall = (name: string): boolean =>
+      input.some((item) => item["type"] === "function_call" && item["name"] === name);
+    const hasWebSearch = input.some((item) => item["type"] === "web_search_call");
+
+    // Stage 1 — discovery, then commit.
+    if (!hasFunctionCall("commit_issue_profile")) {
+      if (!hasWebSearch) {
+        return {
+          id,
+          output: [
+            webSearchItem("EU strategic autonomy digital infrastructure policy terminology"),
+            webSearchItem("European sovereign cloud AI factories chips act institutional language"),
+            assistantItem(
+              "Demo discovery pass. The institutional debate uses terms such as “technological " +
+                "sovereignty”, “strategic autonomy”, “economic security”, “AI factories” and “sovereign " +
+                "cloud”. Adjacent-but-different framings (general digital skills, sectoral AI applications) " +
+                "are noted as exclusions. I can now structure the Issue Profile.",
+              DEMO_CITATIONS,
+            ),
+          ],
+          outputText: "",
+        };
+      }
+      return {
+        id,
+        output: [functionCallItem("commit_issue_profile", DEMO_PROFILE_ARGUMENTS)],
+        outputText: "",
+      };
+    }
+
+    // Stage 2 — Milestone 2: CORDIS retrieval per search hypothesis.
+    if (this.innovation && !hasFunctionCall("search_innovation_projects")) {
       return {
         id,
         output: [
-          {
-            type: "web_search_call",
-            id: "demo_ws_1",
-            status: "completed",
-            action: { type: "search", query: "EU strategic autonomy digital infrastructure policy terminology" },
-          },
-          {
-            type: "web_search_call",
-            id: "demo_ws_2",
-            status: "completed",
-            action: { type: "search", query: "European sovereign cloud AI factories chips act institutional language" },
-          },
-          assistantItem(
-            "Demo discovery pass. The institutional debate uses terms such as “technological " +
-              "sovereignty”, “strategic autonomy”, “economic security”, “AI factories” and “sovereign " +
-              "cloud”. Adjacent-but-different framings (general digital skills, sectoral AI applications) " +
-              "are noted as exclusions. I can now structure the Issue Profile.",
-            DEMO_CITATIONS,
-          ),
+          functionCallItem("search_innovation_projects", {
+            searchHypothesis: "sovereign cloud and AI factory initiatives in the EU",
+            problemStatement: DEMO_PROFILE_ARGUMENTS.problemStatement,
+            keywords: ["sovereign cloud", "strategic autonomy", "AI factories", "digital autonomy"],
+            mechanisms: DEMO_PROFILE_ARGUMENTS.mechanisms.slice(0, 2),
+            maxResults: 10,
+          }),
         ],
         outputText: "",
       };
     }
 
-    if (this.turn === 2) {
-      return {
-        id,
-        output: [
-          {
-            type: "function_call",
-            id: "demo_fc_1",
-            call_id: "demo_call_1",
-            name: "commit_issue_profile",
-            arguments: JSON.stringify(DEMO_PROFILE_ARGUMENTS),
-          },
-        ],
-        outputText: "",
-      };
+    // Stage 3 — semantic validation of the retrieved candidates.
+    if (this.innovation && !hasFunctionCall("validate_innovation_candidates")) {
+      const candidates = parseLastSearchCandidates(input);
+      if (candidates.length > 0) {
+        return {
+          id,
+          output: [functionCallItem("validate_innovation_candidates", { validations: demoValidations(candidates) })],
+          outputText: "",
+        };
+      }
     }
 
+    // Stage 4 — final synthesis.
     return {
       id,
       output: [
         assistantItem(
-          "Demo Issue Understanding summary: the investigation targets the structural dependence of " +
-            "European firms and institutions on non-EU controlled compute, cloud, foundation models and " +
-            "semiconductors. The committed profile captures the problem, its mechanisms (capacity " +
-            "concentration, limited EU fabrication, non-EU frontier models, lock-in), the affected actors, " +
-            "the material impacts, and four materially different search hypotheses for future authoritative " +
-            "retrieval. This demo run stops at Milestone 1: innovation and policy retrieval would follow " +
-            "in the next milestones.",
+          this.innovation
+            ? "Demo synthesis. Executive synthesis: the investigated Issue — European dependence on " +
+              "non-EU controlled compute, cloud, foundation models and semiconductors — is materially " +
+              "addressed by at least one funded EU research initiative (a federated sovereign cloud-edge " +
+              "and compute project), while initiatives that merely use the same technologies for other " +
+              "problems (agricultural AI) or address a different infrastructure problem (quantum " +
+              "communications security) were rejected by semantic validation. Innovation signals point to " +
+              "an active EU funding line on digital autonomy. Actors include European research centres, " +
+              "HPC/national e-infrastructures and public administrations. Information gaps: this demo run " +
+              "covers a single search hypothesis; policy intelligence (EUR-Lex/CELLAR) arrives in " +
+              "Milestone 3. Sources: the three demo discovery pages and the CORDIS project records cited " +
+              "in the Evidence workspace."
+            : "Demo Issue Understanding summary: the investigation targets the structural dependence of " +
+              "European firms and institutions on non-EU controlled compute, cloud, foundation models and " +
+              "semiconductors. The committed profile captures the problem, its mechanisms (capacity " +
+              "concentration, limited EU fabrication, non-EU frontier models, lock-in), the affected actors, " +
+              "the material impacts, and four materially different search hypotheses for future authoritative " +
+              "retrieval. This demo run stops at Milestone 1: innovation and policy retrieval would follow " +
+              "in the next milestones.",
           [],
         ),
       ],
       outputText: "",
     };
   }
+}
+
+interface DemoCandidateView {
+  candidateId: string;
+  sourceId?: string;
+  title: string;
+}
+
+function parseLastSearchCandidates(input: Array<Record<string, unknown>>): DemoCandidateView[] {
+  for (let i = input.length - 1; i >= 0; i--) {
+    const item = input[i];
+    if (!item || item["type"] !== "function_call_output") continue;
+    try {
+      const parsed = JSON.parse(String(item["output"])) as { candidates?: unknown };
+      if (!Array.isArray(parsed["candidates"])) continue;
+      const views: DemoCandidateView[] = [];
+      for (const candidate of parsed["candidates"]) {
+        if (typeof candidate !== "object" || candidate === null) continue;
+        const view = candidate as Record<string, unknown>;
+        if (typeof view["candidateId"] === "string" && typeof view["title"] === "string") {
+          views.push({
+            candidateId: view["candidateId"],
+            ...(typeof view["sourceId"] === "string" ? { sourceId: view["sourceId"] } : {}),
+            title: view["title"],
+          });
+        }
+      }
+      return views;
+    } catch {
+      // not the search output — keep scanning
+    }
+  }
+  return [];
+}
+
+function demoValidations(candidates: DemoCandidateView[]): Array<Record<string, unknown>> {
+  return candidates.map((candidate) => {
+    const rcn = candidate.sourceId ?? "";
+    if (rcn === "101138085") {
+      return {
+        candidateId: candidate.candidateId,
+        verdict: "relevant",
+        matchLevel: "formal_funded_response",
+        relevanceExplanation:
+          "The project directly addresses the committed problem: it builds EU-controlled federated " +
+          "compute/cloud-edge capacity to reduce dependence on non-EU hyperscalers and lock-in.",
+        matchedProblemElements: ["dependence on non-EU controlled compute and cloud infrastructure"],
+        matchedMechanisms: [
+          "Concentration of hyperscale cloud and edge capacity under non-EU operators",
+          "Lock-in effects of existing non-EU technology stacks in European industry",
+        ],
+        matchedImpacts: ["Reduced European strategic autonomy in critical digital capacity"],
+        matchedInterventions: ["EU funding programmes for sovereign cloud and compute capacity"],
+        exclusionTriggered: null,
+      };
+    }
+    if (rcn === "101112993") {
+      return {
+        candidateId: candidate.candidateId,
+        verdict: "not_relevant",
+        matchLevel: "thematic_association",
+        relevanceExplanation:
+          "The project applies AI and cloud analytics to agricultural yield optimization: it shares the " +
+          "technology but addresses a different problem, and runs on non-EU commercial cloud without any " +
+          "dependency/autonomy objective.",
+        matchedProblemElements: [],
+        matchedMechanisms: [],
+        matchedImpacts: [],
+        matchedInterventions: [],
+        exclusionTriggered: "Projects applying AI to sectoral problems without addressing dependency or autonomy",
+      };
+    }
+    return {
+      candidateId: candidate.candidateId,
+      verdict: "not_relevant",
+      matchLevel: "thematic_association",
+      relevanceExplanation:
+        "Quantum key distribution secures communications infrastructure against future computational " +
+        "threats: a related technological-sovereignty theme, but it does not address the committed problem " +
+        "of dependence on non-EU compute, cloud, models or semiconductors.",
+      matchedProblemElements: [],
+      matchedMechanisms: [],
+      matchedImpacts: [],
+      matchedInterventions: [],
+      exclusionTriggered: "Cybersecurity product suites unrelated to infrastructure control",
+    };
+  });
+}
+
+function webSearchItem(query: string): Record<string, unknown> {
+  return {
+    type: "web_search_call",
+    id: `demo_ws_${Math.random().toString(36).slice(2, 8)}`,
+    status: "completed",
+    action: { type: "search", query },
+  };
+}
+
+function functionCallItem(name: string, args: unknown): Record<string, unknown> {
+  return {
+    type: "function_call",
+    id: `demo_fc_${name}_${Math.random().toString(36).slice(2, 8)}`,
+    call_id: `demo_call_${name}_${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    arguments: JSON.stringify(args),
+  };
 }
 
 function assistantItem(text: string, annotations: Array<Record<string, unknown>>) {

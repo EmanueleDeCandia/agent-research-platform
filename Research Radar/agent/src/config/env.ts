@@ -17,6 +17,19 @@ export const MILESTONE_CAPABILITIES: Capabilities = {
   policyRetrieval: false,
 };
 
+/**
+ * Milestone 2: innovation retrieval is active when CORDIS is not disabled and
+ * either an API key is configured or demo mode provides the scripted adapter.
+ */
+export function computeCapabilities(env: NodeJS.ProcessEnv, demoMode: boolean): Capabilities {
+  const enabled = (env["CORDIS_ENABLED"] ?? "true").trim().toLowerCase() !== "false";
+  const hasKey = Boolean((env["CORDIS_API_KEY"] ?? "").trim());
+  return {
+    innovationRetrieval: enabled && (hasKey || demoMode),
+    policyRetrieval: false, // Milestone 3
+  };
+}
+
 export interface RuntimeConfig {
   readonly appRoot: string;
   readonly openaiApiKey?: string;
@@ -26,6 +39,9 @@ export interface RuntimeConfig {
   readonly maxModelTurns: number;
   readonly maxToolCalls: number;
   readonly demoMode: boolean;
+  readonly cordisApiKey?: string;
+  readonly cordisBaseUrl?: string;
+  readonly cordisMaxResultsCap: number;
   readonly capabilities: Capabilities;
 }
 
@@ -60,6 +76,9 @@ export function loadDotEnv(appRoot: string): void {
 
 export function loadRuntimeConfig(appRoot: string): RuntimeConfig {
   const apiKey = process.env["OPENAI_API_KEY"]?.trim();
+  const cordisApiKey = process.env["CORDIS_API_KEY"]?.trim();
+  const cordisBaseUrl = process.env["CORDIS_BASE_URL"]?.trim();
+  const demoMode = (process.env["DEMO_MODE"] ?? "").trim().toLowerCase() === "true";
   return {
     appRoot,
     ...(apiKey ? { openaiApiKey: apiKey } : {}),
@@ -68,7 +87,10 @@ export function loadRuntimeConfig(appRoot: string): RuntimeConfig {
     httpTimeoutMs: readInt("RR_HTTP_TIMEOUT_MS", 120_000),
     maxModelTurns: readInt("RR_MAX_MODEL_TURNS", 12),
     maxToolCalls: readInt("RR_MAX_TOOL_CALLS", 24),
-    demoMode: (process.env["DEMO_MODE"] ?? "").trim().toLowerCase() === "true",
-    capabilities: MILESTONE_CAPABILITIES,
+    demoMode,
+    ...(cordisApiKey ? { cordisApiKey } : {}),
+    ...(cordisBaseUrl ? { cordisBaseUrl } : {}),
+    cordisMaxResultsCap: readInt("CORDIS_MAX_RESULTS", 20),
+    capabilities: computeCapabilities(process.env, demoMode),
   };
 }
